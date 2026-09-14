@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ymmooot.cc-nudge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>__BASE__/nudge.sh</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CC_NUDGE_IDLE_MIN</key>
+    <string>15</string>
+    <key>CC_NUDGE_STUCK_MIN</key>
+    <string>45</string>
+    <key>CC_NUDGE_REPEAT_MIN</key>
+    <string>30</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__BASE__/launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>__BASE__/launchd.log</string>
+</dict>
+</plist>
