@@ -35,86 +35,78 @@ notify() {  # title subtitle message group cwd session_title
   fi
 }
 
-is_ignored() {  # cwd
+is_ignored() {  # cwd sid  — ignore の各行を「セッション ID なら完全一致、それ以外は cwd の部分一致」で判定
   [[ -f "$IGNORE" ]] || return 1
   local pat
   while IFS= read -r pat; do
     pat="${pat%%#*}"; pat="${pat## }"; pat="${pat%% }"
     [[ -z "$pat" ]] && continue
+    [[ "$2" == "$pat" ]] && return 0
     [[ "$1" == *"$pat"* ]] && return 0
   done < "$IGNORE"
   return 1
 }
 
-# ---- 1. 稼働中の claude プロセスを cwd ごとに数える ----
-typeset -A nproc
+# ---- 稼働中の claude プロセスごとに session-id / cwd を取り、会話ログを見る ----
 for f in "$CLAUDE_DIR"/sessions/*.json(N); do
   pid="${${f:t}%.json}"
   kill -0 "$pid" 2>/dev/null || continue
   [[ "$(ps -o comm= -p "$pid" 2>/dev/null)" == *claude* ]] || continue
-  cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
-  [[ -n "$cwd" ]] || continue
-  if is_ignored "$cwd"; then
-    [[ "$VERBOSE" == 1 ]] && log "IGNORED pid=$pid cwd=$cwd"
+  sid="$(jq -r '.sessionId // empty' "$f" 2>/dev/null)"
+  cwd="$(jq -r '.cwd // empty' "$f" 2>/dev/null)"
+  [[ -n "$sid" && -n "$cwd" ]] || { log "WARN sessionId/cwd not found in $f"; continue; }
+  if is_ignored "$cwd" "$sid"; then
+    [[ "$VERBOSE" == 1 ]] && log "IGNORED pid=$pid sid=$sid cwd=$cwd"
     continue
   fi
-  nproc[$cwd]=$(( ${nproc[$cwd]:-0} + 1 ))
-done
+  jsonl="$CLAUDE_DIR/projects/${cwd//[\/.]/-}/$sid.jsonl"
+  [[ -f "$jsonl" ]] || { log "WARN log not found: $jsonl"; continue; }
 
-# ---- 2. cwd ごとに「稼働プロセス数」ぶんだけ最近更新された会話ログを見る ----
-for cwd in "${(@k)nproc}"; do
-  n=${nproc[$cwd]}
-  proj="$CLAUDE_DIR/projects/${cwd//[\/.]/-}"
-  [[ -d "$proj" ]] || { log "WARN project dir not found for $cwd"; continue; }
-  for jsonl in "$proj"/*.jsonl(Nom[1,$n]); do
-    sid="${${jsonl:t}%.jsonl}"
+  # 直近のユーザー/アシスタントメッセージ（サイドチェーン除外）
+  last="$(tail -n 300 "$jsonl" | jq -c '
+    select(.type=="user" or .type=="assistant") | select(.isSidechain != true)
+    | {type, ts: .timestamp,
+       tools: ([.message.content[]? | select(type=="object" and .type=="tool_use") | .name]),
+       text: ([.message.content | if type=="string" then . else (.[]? | select(type=="object" and .type=="text") | .text) end] | join(" ") | .[0:80])}
+  ' 2>/dev/null | tail -1)"
+  [[ -n "$last" ]] || continue
 
-    # 直近のユーザー/アシスタントメッセージ（サイドチェーン除外）
-    last="$(tail -n 300 "$jsonl" | jq -c '
-      select(.type=="user" or .type=="assistant") | select(.isSidechain != true)
-      | {type, ts: .timestamp,
-         tools: ([.message.content[]? | select(type=="object" and .type=="tool_use") | .name]),
-         text: ([.message.content | if type=="string" then . else (.[]? | select(type=="object" and .type=="text") | .text) end] | join(" ") | .[0:80])}
-    ' 2>/dev/null | tail -1)"
-    [[ -n "$last" ]] || continue
+  ts="$(print -r -- "$last" | jq -r '.ts // empty')"
+  [[ -n "$ts" ]] || continue
+  epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%S" "${ts%%.*}" +%s 2>/dev/null) || continue
+  idle=$(( (now - epoch) / 60 ))
+  mtype="$(print -r -- "$last" | jq -r '.type')"
+  tools="$(print -r -- "$last" | jq -r '.tools | join(",")')"
+  text="$(print -r -- "$last" | jq -r '.text' | tr '\n' ' ')"
+  title="$(grep '"ai-title"' "$jsonl" | tail -1 | jq -r '.aiTitle // empty' 2>/dev/null)"
+  [[ -n "$title" ]] || title="${cwd:t}"
 
-    ts="$(print -r -- "$last" | jq -r '.ts // empty')"
-    [[ -n "$ts" ]] || continue
-    epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%S" "${ts%%.*}" +%s 2>/dev/null) || continue
-    idle=$(( (now - epoch) / 60 ))
-    mtype="$(print -r -- "$last" | jq -r '.type')"
-    tools="$(print -r -- "$last" | jq -r '.tools | join(",")')"
-    text="$(print -r -- "$last" | jq -r '.text' | tr '\n' ' ')"
-    title="$(grep '"ai-title"' "$jsonl" | tail -1 | jq -r '.aiTitle // empty' 2>/dev/null)"
-    [[ -n "$title" ]] || title="${cwd:t}"
+  if [[ "$mtype" == assistant && ( -z "$tools" || "$tools" == *AskUserQuestion* ) ]]; then
+    state=WAITING; limit=$IDLE_MIN
+  else
+    state=RUNNING; limit=$STUCK_MIN
+  fi
+  [[ "$VERBOSE" == 1 ]] && log "$state idle=${idle}m sid=$sid [$title] last=$mtype tools=$tools"
 
-    if [[ "$mtype" == assistant && ( -z "$tools" || "$tools" == *AskUserQuestion* ) ]]; then
-      state=WAITING; limit=$IDLE_MIN
-    else
-      state=RUNNING; limit=$STUCK_MIN
-    fi
-    [[ "$VERBOSE" == 1 ]] && log "$state idle=${idle}m sid=$sid [$title] last=$mtype tools=$tools"
+  (( idle >= limit )) || continue
 
-    (( idle >= limit )) || continue
+  # 再通知の間引き
+  sf="$STATE/$sid"
+  if [[ -f "$sf" ]]; then
+    lastn=$(<"$sf")
+    (( now - lastn < REPEAT_MIN * 60 )) && continue
+  fi
 
-    # 再通知の間引き
-    sf="$STATE/$sid"
-    if [[ -f "$sf" ]]; then
-      lastn=$(<"$sf")
-      (( now - lastn < REPEAT_MIN * 60 )) && continue
-    fi
-
-    if [[ "$state" == WAITING ]]; then
-      ntitle="Claude Code が ${idle} 分 入力待ち"
-      msg="${text:-返答済み。次の指示を待っています}"
-    else
-      ntitle="Claude Code が ${idle} 分 止まっている？"
-      msg="最後: ${mtype}${tools:+ ($tools)} / 許可プロンプト待ちかハングの可能性"
-    fi
-    log "NOTIFY $state idle=${idle}m cwd=$cwd sid=$sid [$title]"
-    notify "$ntitle" "$title  (${cwd:t})" "$msg" "cc-nudge-$sid" "$cwd" "$title"
-    [[ "$DRY_RUN" == 1 ]] || print -r -- "$now" > "$sf"
-  done
+  if [[ "$state" == WAITING ]]; then
+    ntitle="Claude Code が ${idle} 分 入力待ち"
+    msg="${text:-返答済み。次の指示を待っています}"
+  else
+    ntitle="Claude Code が ${idle} 分 止まっている？"
+    msg="最後: ${mtype}${tools:+ ($tools)} / 許可プロンプト待ちかハングの可能性"
+  fi
+  log "NOTIFY $state idle=${idle}m cwd=$cwd sid=$sid [$title]"
+  notify "$ntitle" "$title  (${cwd:t})" "$msg" "cc-nudge-$sid" "$cwd" "$title"
+  [[ "$DRY_RUN" == 1 ]] || print -r -- "$now" > "$sf"
 done
 
 # 古い state を掃除（7日）

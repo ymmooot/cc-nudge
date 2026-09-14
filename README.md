@@ -6,7 +6,7 @@ zsh + jq だけで動き、launchd で 5 分おきに走ります。
 
 ## 仕組み
 
-1. `~/.claude/sessions/<pid>.json` から稼働中の claude プロセスを見つけ、`lsof` で作業ディレクトリを取る
+1. `~/.claude/sessions/<pid>.json` から稼働中の claude プロセスの session-id と作業ディレクトリを取る
 2. `~/.claude/projects/<作業ディレクトリ>/<session-id>.jsonl` の会話ログから、最後の user / assistant メッセージを読む
 3. 状態を判定して、しきい値を超えていたら通知する
 
@@ -49,7 +49,21 @@ cd cc-nudge
 
 ## 監視から外す
 
-`~/.claude/cc-nudge/ignore` に作業ディレクトリのパス（部分一致）を 1 行ずつ書きます。
+`~/.claude/cc-nudge/ignore` に 1 行ずつ書きます。
+
+- session-id（`<session-id>.jsonl` の名前。Claude Code 内では `$CLAUDE_CODE_SESSION_ID`）→ そのセッションだけ完全一致で除外
+- それ以外 → 作業ディレクトリのパスとして部分一致で除外（そのディレクトリの全セッションが対象）
+
+Claude Code のセッション内から操作する場合は `/cc-nudge` スキルが使えます（`install.sh` が `~/.claude/skills/cc-nudge` にリンクします）。
+
+```
+/cc-nudge ignore 翌日再開まで   # 今のセッションを除外
+/cc-nudge unignore              # 監視に戻す
+/cc-nudge list                  # 除外一覧
+/cc-nudge check                 # 通知なしで判定結果を表示
+```
+
+「cc-nudge から外して」「今日はここまで」のような自然文でも呼び出せます。
 
 ## 動作確認
 
@@ -69,7 +83,6 @@ CC_NUDGE_DRY_RUN=1 CC_NUDGE_VERBOSE=1 ./nudge.sh
 
 ## 既知の制限
 
-- 会話ログには pid が記録されないため、同じディレクトリで複数セッションを開いている場合は「更新が新しい順に稼働プロセス数ぶん」のログを対応付けています
 - RUNNING の通知は、サブエージェントが長時間走っている場合にも出ます
 
 ## License

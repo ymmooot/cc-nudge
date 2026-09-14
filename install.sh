@@ -11,9 +11,12 @@ command -v terminal-notifier >/dev/null || echo "note: terminal-notifier が無�
 
 mkdir -p "$BASE/state" "$HOME/Library/LaunchAgents"
 ln -sf "$SRC/nudge.sh" "$BASE/nudge.sh"
+mkdir -p "$HOME/.claude/skills"
+ln -sfn "$SRC/skills/cc-nudge" "$HOME/.claude/skills/cc-nudge"
 [[ -f "$BASE/ignore" ]] || cp "$SRC/ignore.example" "$BASE/ignore"
 sed "s|__BASE__|$BASE|g" "$SRC/com.ymmooot.cc-nudge.plist.template" > "$PLIST"
 
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 echo "installed: $PLIST -> $BASE/nudge.sh"
+echo "skill: ~/.claude/skills/cc-nudge -> $SRC/skills/cc-nudge (/cc-nudge)"

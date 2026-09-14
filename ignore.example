@@ -1,2 +1,6 @@
-# cc-nudge の監視から外す作業ディレクトリ（部分一致、1行1パターン、# はコメント）
+# cc-nudge の監視から外す対象（1行1パターン、# はコメント）
+#   セッション ID → 完全一致（Claude Code 内なら $CLAUDE_CODE_SESSION_ID、/cc-nudge スキルで追加できる）
+#   それ以外     → 作業ディレクトリの部分一致
+# 2026-01-01 翌日再開まで (sandbox)
+# 0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b
 # /Users/you/ghq/github.com/example/sandbox
