@@ -19,15 +19,17 @@ STUCK_MIN="${CC_NUDGE_STUCK_MIN:-45}"
 REPEAT_MIN="${CC_NUDGE_REPEAT_MIN:-30}"
 DRY_RUN="${CC_NUDGE_DRY_RUN:-0}"   # 1 なら通知せずログ出力のみ
 VERBOSE="${CC_NUDGE_VERBOSE:-0}"   # 1 なら全セッションの状態をログに出す
+OPEN="${0:A:h}/open.sh"           # 通知クリック時に herdr の対象ペインを開くスクリプト
 
 mkdir -p "$STATE"
 now=$(date +%s)
 log() { print -r -- "$(date '+%F %T') $*" >> "$LOG"; [[ "$DRY_RUN" == 1 ]] && print -r -- "$*"; }
 
-notify() {  # title subtitle message group
+notify() {  # title subtitle message group cwd session_title
   if [[ "$DRY_RUN" == 1 ]]; then return; fi
   if command -v terminal-notifier >/dev/null; then
-    terminal-notifier -title "$1" -subtitle "$2" -message "$3" -group "$4" -sound default >/dev/null 2>&1
+    terminal-notifier -title "$1" -subtitle "$2" -message "$3" -group "$4" -sound default \
+      -execute "/bin/zsh ${(qq)OPEN} ${(qq)5} ${(qq)6}" >/dev/null 2>&1
   else
     osascript -e "display notification \"${3//\"/\\\"}\" with title \"${1//\"/\\\"}\" subtitle \"${2//\"/\\\"}\"" >/dev/null 2>&1
   fi
@@ -110,7 +112,7 @@ for cwd in "${(@k)nproc}"; do
       msg="最後: ${mtype}${tools:+ ($tools)} / 許可プロンプト待ちかハングの可能性"
     fi
     log "NOTIFY $state idle=${idle}m cwd=$cwd sid=$sid [$title]"
-    notify "$ntitle" "$title  (${cwd:t})" "$msg" "cc-nudge-$sid"
+    notify "$ntitle" "$title  (${cwd:t})" "$msg" "cc-nudge-$sid" "$cwd" "$title"
     [[ "$DRY_RUN" == 1 ]] || print -r -- "$now" > "$sf"
   done
 done

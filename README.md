@@ -17,11 +17,22 @@ zsh + jq だけで動き、launchd で 5 分おきに走ります。
 
 同じセッションへの再通知は `CC_NUDGE_REPEAT_MIN`（既定 30 分）空けます。
 
+## 通知をクリックすると
+
+`open.sh` が呼ばれ、[herdr](https://github.com/herdr-dev/herdr) で該当セッションが動いているペインにフォーカスを移します。
+
+- `herdr pane list` から、作業ディレクトリと Claude Code のセッションタイトル（ターミナルタイトル）が一致するペインを探します
+- herdr のクライアントがどこかのターミナルで開いていれば、そのアプリを前面に出します（祖先プロセスから .app を特定するのでターミナルアプリは問いません）
+- 開いていなければ `CC_NUDGE_TERMINAL_APP`（既定 `Terminal`）で新しいウィンドウを開き、`herdr` を起動してからフォーカスします
+
+herdr を使っていない場合は `-execute` が何もしないだけで、通知自体は変わらず届きます。
+
 ## 必要なもの
 
 - macOS
 - `jq`
-- `terminal-notifier`（無ければ `osascript` の `display notification` にフォールバック）
+- `terminal-notifier`（無ければ `osascript` の `display notification` にフォールバック。クリック動作は terminal-notifier のみ）
+- `herdr`（任意。通知クリックでペインを開く機能に使う）
 
 ## インストール
 
