@@ -17,6 +17,18 @@ zsh + jq だけで動き、launchd で 5 分おきに走ります。
 
 同じセッションへの再通知は `CC_NUDGE_REPEAT_MIN`（既定 30 分）空けます。
 
+### 通知しないもの
+
+会話ログが止まっていても「人間が待っている」とは限らないケースは除外します。
+
+| 対象外 | 理由 |
+| --- | --- |
+| pid が使い回されて別プロセスになっている json | `claude daemon` / `bg-pty-host` / `bg-spare` が常駐しているため、終了済みセッションの pid が別の claude プロセスに当たることがある。json の `procStart` と実プロセスの起動時刻で照合する |
+| バックグラウンドジョブ（`kind: bg`） | ジョブが終わってもデーモンがプロセスを抱えたままなので、生存＝待機とみなせない。ただし json の `status` が `waiting`（入力待ちの自己申告）なら通知する |
+| 別セッションに引き継がれた会話 | 会話ログ末尾の `continued-in` で判別する。引き継ぎ後は jsonl が凍結するため、放置すると RUNNING として永久に鳴り続ける。続きは後継セッション側で判定される |
+
+判定できない時（`procStart` が無い・後継の会話ログが見つからない等）は通知を落とさない側に倒します。
+
 ## 通知をクリックすると
 
 `open.sh` が呼ばれ、[herdr](https://github.com/herdr-dev/herdr) で該当セッションが動いているペインにフォーカスを移します。
@@ -84,6 +96,7 @@ CC_NUDGE_DRY_RUN=1 CC_NUDGE_VERBOSE=1 ./nudge.sh
 ## 既知の制限
 
 - RUNNING の通知は、サブエージェントが長時間走っている場合にも出ます
+- WAITING / RUNNING の判定は会話ログからの推測です。`~/.claude/sessions/<pid>.json` の `status` の方が正確な場面がありますが、値の意味が確定するまで参考情報として `CC_NUDGE_VERBOSE=1` のログに出すだけにしています
 
 ## License
 

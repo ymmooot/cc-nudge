@@ -6,6 +6,11 @@
 #   WAITING : 最後のメッセージが assistant の返答（tool_use なし）or AskUserQuestion → こちらの入力待ち
 #   RUNNING : それ以外（ツール実行中・Claude 思考中・許可プロンプト待ちの可能性）
 #   WAITING が IDLE_MIN 分、RUNNING が STUCK_MIN 分続いたら通知。同一セッションへは REPEAT_MIN 分空ける。
+#
+# 対象外:
+#   - pid が使い回されて別プロセスになっている json（procStart で照合）
+#   - バックグラウンドジョブ（kind=bg）。ただし status=waiting なら入力待ちとして通知する
+#   - 別セッションに引き継がれた会話（jsonl の末尾が continued-in で、後継の jsonl が実在するもの）
 set -u
 export PATH="$HOME/homebrew/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
@@ -47,6 +52,26 @@ is_ignored() {  # cwd sid  — ignore の各行を「セッション ID なら�
   return 1
 }
 
+same_proc() {  # pid session.json — json の procStart と実プロセスの起動時刻が一致するか
+  # pid は使い回されるので、json を書いたプロセスと今の pid が同一かを確かめる。
+  # procStart は UTC 表記だが将来ローカル表記になっても壊れないよう両方で照合し、
+  # 判定できない時（取得失敗・パース失敗）は通知を落とさないよう真を返す。
+  local json_start lstart ps_epoch e_utc e_local
+  json_start="$(jq -r '.procStart // empty' "$2" 2>/dev/null)"
+  [[ -n "$json_start" ]] || return 0
+  lstart="$(ps -o lstart= -p "$1" 2>/dev/null | sed -E 's/  +/ /g; s/^ +//; s/ +$//')"
+  [[ -n "$lstart" ]] || return 0
+  ps_epoch=$(date -j -f "%a %b %d %T %Y" "$lstart" +%s 2>/dev/null) || return 0
+  e_utc=$(date -j -u -f "%a %b %d %T %Y" "$json_start" +%s 2>/dev/null) || e_utc=""
+  e_local=$(date -j -f "%a %b %d %T %Y" "$json_start" +%s 2>/dev/null) || e_local=""
+  [[ -n "$e_utc$e_local" ]] || return 0
+  local e
+  for e in $e_utc $e_local; do
+    (( ps_epoch >= e - 2 && ps_epoch <= e + 2 )) && return 0
+  done
+  return 1
+}
+
 # ---- 稼働中の claude プロセスごとに session-id / cwd を取り、会話ログを見る ----
 for f in "$CLAUDE_DIR"/sessions/*.json(N); do
   pid="${${f:t}%.json}"
@@ -54,7 +79,23 @@ for f in "$CLAUDE_DIR"/sessions/*.json(N); do
   [[ "$(ps -o comm= -p "$pid" 2>/dev/null)" == *claude* ]] || continue
   sid="$(jq -r '.sessionId // empty' "$f" 2>/dev/null)"
   cwd="$(jq -r '.cwd // empty' "$f" 2>/dev/null)"
+  kind="$(jq -r '.kind // "interactive"' "$f" 2>/dev/null)"
+  sstatus="$(jq -r '.status // empty' "$f" 2>/dev/null)"   # status は zsh の予約変数なので別名
   [[ -n "$sid" && -n "$cwd" ]] || { log "WARN sessionId/cwd not found in $f"; continue; }
+
+  if ! same_proc "$pid" "$f"; then
+    [[ "$VERBOSE" == 1 ]] && log "SKIP stale-pid pid=$pid sid=$sid"
+    continue
+  fi
+
+  # バックグラウンドジョブ (claude bg-spare) はジョブが終わってもデーモンがプロセスを
+  # 抱えたままなので「生きている＝人間が待っている」が成り立たない。会話ログからの推測はやめ、
+  # 本人が入力待ちを自己申告している時だけ督促する。
+  if [[ "$kind" == bg && "$sstatus" != waiting ]]; then
+    [[ "$VERBOSE" == 1 ]] && log "SKIP bg pid=$pid sid=$sid status=${sstatus:-?}"
+    continue
+  fi
+
   if is_ignored "$cwd" "$sid"; then
     [[ "$VERBOSE" == 1 ]] && log "IGNORED pid=$pid sid=$sid cwd=$cwd"
     continue
@@ -64,8 +105,8 @@ for f in "$CLAUDE_DIR"/sessions/*.json(N); do
 
   # 直近のユーザー/アシスタントメッセージ（サイドチェーン除外）
   last="$(tail -n 300 "$jsonl" | jq -c '
-    select(.type=="user" or .type=="assistant") | select(.isSidechain != true)
-    | {type, ts: .timestamp,
+    select(.type=="user" or .type=="assistant" or .type=="continued-in") | select(.isSidechain != true)
+    | {type, ts: .timestamp, next: (.continuedInSessionId // ""),
        tools: ([.message.content[]? | select(type=="object" and .type=="tool_use") | .name]),
        text: ([.message.content | if type=="string" then . else (.[]? | select(type=="object" and .type=="text") | .text) end] | join(" ") | .[0:80])}
   ' 2>/dev/null | tail -1)"
@@ -76,17 +117,28 @@ for f in "$CLAUDE_DIR"/sessions/*.json(N); do
   epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%S" "${ts%%.*}" +%s 2>/dev/null) || continue
   idle=$(( (now - epoch) / 60 ))
   mtype="$(print -r -- "$last" | jq -r '.type')"
+
+  # 別セッションに引き継がれた会話は、この sid では二度と動かない（jsonl が凍結して
+  # idle が伸び続け、RUNNING として永久に鳴る）。後継の会話ログが実在する時だけ切る。
+  if [[ "$mtype" == continued-in ]]; then
+    nsid="$(print -r -- "$last" | jq -r '.next // empty')"
+    if [[ -n "$nsid" && -f "$CLAUDE_DIR/projects/${cwd//[\/.]/-}/$nsid.jsonl" ]]; then
+      [[ "$VERBOSE" == 1 ]] && log "SKIP continued-in sid=$sid -> $nsid"
+      continue
+    fi
+  fi
+
   tools="$(print -r -- "$last" | jq -r '.tools | join(",")')"
   text="$(print -r -- "$last" | jq -r '.text' | tr '\n' ' ')"
   title="$(grep '"ai-title"' "$jsonl" | tail -1 | jq -r '.aiTitle // empty' 2>/dev/null)"
   [[ -n "$title" ]] || title="${cwd:t}"
 
-  if [[ "$mtype" == assistant && ( -z "$tools" || "$tools" == *AskUserQuestion* ) ]]; then
+  if [[ "$kind" == bg || ( "$mtype" == assistant && ( -z "$tools" || "$tools" == *AskUserQuestion* ) ) ]]; then
     state=WAITING; limit=$IDLE_MIN
   else
     state=RUNNING; limit=$STUCK_MIN
   fi
-  [[ "$VERBOSE" == 1 ]] && log "$state idle=${idle}m sid=$sid [$title] last=$mtype tools=$tools"
+  [[ "$VERBOSE" == 1 ]] && log "$state idle=${idle}m sid=$sid [$title] last=$mtype tools=$tools kind=$kind status=${sstatus:-?}"
 
   (( idle >= limit )) || continue
 
