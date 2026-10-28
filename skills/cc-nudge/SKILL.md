@@ -40,14 +40,13 @@ fi
 パターン行と、その直前の `# YYYY-MM-DD ...` コメント行を削除する。対象は ignore と同じ規則（既定はセッション ID、ディレクトリ指定なら `$PWD`）。
 
 ```zsh
+# awk は使わない: スキル本文の $0 が起動引数に置換されて届き、全行が空になる
 IGNORE="$HOME/.claude/cc-nudge/ignore"; target="$CLAUDE_CODE_SESSION_ID"
-if ! grep -qxF -- "$target" "$IGNORE"; then echo "not ignored: $target"; else
-  awk -v p="$target" '
-    { l[NR]=$0 }
-    END {
-      for (i=1;i<=NR;i++) if (l[i]==p) { skip[i]=1; if (i>1 && l[i-1] ~ /^# [0-9]+-[0-9]+-[0-9]+ /) skip[i-1]=1 }
-      for (i=1;i<=NR;i++) if (!skip[i]) print l[i]
-    }' "$IGNORE" > "$IGNORE.tmp" && mv "$IGNORE.tmp" "$IGNORE"
+n=$(grep -nxF -- "$target" "$IGNORE" | head -1 | cut -d: -f1)
+if [[ -z "$n" ]]; then echo "not ignored: $target"; else
+  from=$n
+  if [[ $n -gt 1 ]] && sed -n "$((n-1))p" "$IGNORE" | grep -q '^# [0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\} '; then from=$((n-1)); fi
+  sed -i '' "${from},${n}d" "$IGNORE"
   echo "unignored: $target"
 fi
 ```
