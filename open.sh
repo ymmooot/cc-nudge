@@ -1,16 +1,30 @@
 #!/bin/zsh
-# cc-nudge open: 通知クリック時に呼ばれ、対象セッションが動いている herdr のペインへフォーカスを移す。
+# cc-nudge open: パネルの行を押した時に呼ばれ、対象セッションが動いている herdr のペインへフォーカスを移す。
 # herdr のクライアントが開いていればそのターミナルアプリを前面に出し、無ければ新しくターミナルを開いて herdr を起動する。
 #
-# usage: open.sh <cwd> [title]
+# usage: open.sh <cwd> [title] [pid]
 set -u
 export PATH="$HOME/homebrew/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 TERMINAL_APP="${CC_NUDGE_TERMINAL_APP:-Terminal}"   # herdr が開いていない時に使うアプリ名
 LOG="${CC_NUDGE_DIR:-$HOME/.claude/cc-nudge}/nudge.log"
-cwd="${1:-}"; title="${2:-}"
+cwd="${1:-}"; title="${2:-}"; pid="${3:-}"
 log() { print -r -- "$(date '+%F %T') OPEN $*" >> "$LOG"; }
 
-# 対象ペインの terminal_id を探す。タイトル一致を優先し、無ければ cwd 一致。
+# claude の pid が前面で動いているペインの terminal_id。作業ディレクトリが同じペインから見る。
+# タイトルは作業中に「Claude Code」へ変わるので、同じディレクトリに claude のペインが並ぶと取り違える
+find_by_pid() {
+  [[ -n "$pid" ]] || return
+  local pane tid
+  herdr pane list 2>/dev/null | jq -r --arg cwd "$cwd" '
+    [.result.panes[]? | select(.agent == "claude")] | sort_by(.cwd != $cwd) | .[] | "\(.pane_id) \(.terminal_id)"' |
+    while read -r pane tid; do
+      herdr pane process-info --pane "$pane" 2>/dev/null |
+        jq -e --argjson pid "$pid" '.result.process_info | .foreground_process_group_id == $pid or any(.foreground_processes[]?; .pid == $pid)' >/dev/null &&
+        { print -r -- "$tid"; return; }
+    done
+}
+
+# pid で見つからない時の対象ペインの terminal_id。タイトル一致を優先し、無ければ cwd 一致。
 find_target() {
   herdr pane list 2>/dev/null | jq -r --arg cwd "$cwd" --arg title "$title" '
     [.result.panes[]? | select(.cwd == $cwd)] as $c
@@ -43,10 +57,10 @@ else
   activate_app_of "$cp" || open -a "$TERMINAL_APP"
 fi
 
-target="$(find_target)"
+target="$(find_by_pid)"; [[ -n "$target" ]] || target="$(find_target)"
 if [[ -n "$target" ]]; then
   herdr agent focus "$target" >/dev/null 2>&1 || herdr pane focus --pane "$target" >/dev/null 2>&1
-  log "focused $target cwd=$cwd title=$title"
+  log "focused $target cwd=$cwd title=$title pid=$pid"
 else
-  log "pane not found cwd=$cwd title=$title"
+  log "pane not found cwd=$cwd title=$title pid=$pid"
 fi

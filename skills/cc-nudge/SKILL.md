@@ -1,6 +1,6 @@
 ---
 name: cc-nudge
-description: cc-nudge（放置中の Claude Code セッションを macOS 通知で督促する bot）の操作。作業を中断・保留するときに、いま自分が動いているセッションを督促の対象から外す／戻す、除外一覧の確認、判定のドライラン。「cc-nudge から外して」「督促しないで」「通知を止めて」「監視に戻して」「今日はここまで」などで使う。
+description: cc-nudge（放置中の Claude Code セッションをメニューバーで知らせる常駐アプリ）の操作。作業を中断・保留するときに、いま自分が動いているセッションを督促の対象から外す／戻す、除外一覧の確認、判定のドライラン。「cc-nudge から外して」「督促しないで」「知らせないで」「監視に戻して」「今日はここまで」などで使う。
 argument-hint: "[ignore|unignore|list|check] [理由]"
 ---
 
@@ -8,13 +8,13 @@ argument-hint: "[ignore|unignore|list|check] [理由]"
 
 ## 前提知識（調べ直さないこと）
 
-- 本体: `~/.claude/cc-nudge/nudge.sh`（launchd が 5 分おきに実行）。ログは `~/.claude/cc-nudge/nudge.log`
+- 本体: `~/Applications/CCNudge.app`（10 秒おきに判定し、メニューバーとパネルに出す）。パネルの行のベルのボタンでも外す／戻すができる
 - 除外リスト: `~/.claude/cc-nudge/ignore`
   - 1 行 1 パターン。**セッション ID なら完全一致**、それ以外は稼働中プロセスの **作業ディレクトリに部分一致** で監視から外れる
   - `#` 以降はコメント。パターン行の直前に `# YYYY-MM-DD <理由> (<ディレクトリ名>)` を置く運用
 - 自分のセッション ID は Bash の環境変数 `$CLAUDE_CODE_SESSION_ID`（会話ログ `<sid>.jsonl` の名前と同じ）。空ならシステムプロンプトの scratchpad パスに含まれる UUID を使う
 - 基本は **セッション単位** で除外する。ディレクトリ単位はそのディレクトリで開く全セッションが外れるので、ユーザーが明示したときだけ
-- 変更はファイル保存だけで反映される（再起動不要）。次の実行（最大 5 分後）から効く
+- 変更はファイル保存だけで反映される（再起動不要）。次の判定（最大 10 秒後）から効く
 
 サブコマンドは `$ARGUMENTS` の先頭。省略時は文脈で判断する（「外して」「中断」→ ignore、「戻して」「再開」→ unignore）。
 
@@ -61,15 +61,14 @@ cat "$HOME/.claude/cc-nudge/ignore"
 
 ## check — 判定のドライラン
 
-通知を出さずに全セッションの状態を表示する。自分のセッションが `IGNORED` になっているかの確認に使う。
+全セッションの判定結果を表示する。自分のセッションが `IGNORED` になっているかの確認に使う。
 
 ```zsh
-CC_NUDGE_DRY_RUN=1 CC_NUDGE_VERBOSE=1 "$HOME/.claude/cc-nudge/nudge.sh"
+"$HOME/Applications/CCNudge.app/Contents/MacOS/CCNudge" --check
 ```
 
-出力の見方: `IGNORED pid=... sid=... cwd=...` は除外中。`WAITING idle=Nm` は入力待ち（既定 15 分で通知）、`RUNNING idle=Nm` は実行中扱い（既定 45 分で通知）。
+出力の見方: `IGNORED idle=Nm sid=... cwd=...` は除外中。`WAITING idle=Nm` は入力待ち（既定 15 分で知らせる）、`RUNNING idle=Nm` は実行中扱い（既定 45 分で知らせる）。しきい値を超えたものには `OVERDUE` が付く。
 
 ## やらないこと
 
-- `nudge.sh` や plist（しきい値）は触らない。しきい値変更はリポジトリ `ymmooot/cc-nudge` の README を案内する
-- `~/.claude/cc-nudge/state/` は再通知の間引き用。手で消さない
+- アプリやしきい値は触らない。しきい値の変更はリポジトリ `ymmooot/cc-nudge` の README（`defaults write`）を案内する

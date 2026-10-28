@@ -1,8 +1,7 @@
 #!/bin/zsh
-# launchd から登録解除する（~/.claude/cc-nudge は残す）
+# アプリを終了して取り除く（~/.claude/cc-nudge は残す）
 set -u
-LABEL="com.ymmooot.cc-nudge"
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
+pkill -x CCNudge || true
+rm -rf "$HOME/Applications/CCNudge.app"
 rm -f "$HOME/.claude/skills/cc-nudge"
-echo "uninstalled: $LABEL"
+echo "uninstalled: ~/Applications/CCNudge.app"
