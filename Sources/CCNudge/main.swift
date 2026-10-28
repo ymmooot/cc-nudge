@@ -11,7 +11,8 @@ let escape: UInt16 = 53
 
 let home = FileManager.default.homeDirectoryForCurrentUser
 let ignoreFile = home.appending(path: ".claude/cc-nudge/ignore")
-let scanner = SessionScanner(claudeDir: home.appending(path: ".claude"), ignoreFile: ignoreFile)
+let titleFile = home.appending(path: ".claude/cc-nudge/titles")
+let scanner = SessionScanner(claudeDir: home.appending(path: ".claude"), ignoreFile: ignoreFile, titleFile: titleFile)
 
 /// `defaults write com.ymmooot.cc-nudge idleMinutes 20` のように変えられる
 func loadThresholds() -> Thresholds {
@@ -31,7 +32,7 @@ final class PanelWindow: NSPanel {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    let model = Model(ignore: IgnoreList(url: ignoreFile))
+    let model = Model(ignore: IgnoreList(url: ignoreFile), titles: TitleList(url: titleFile))
     let window = PanelWindow(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
     var monitors: [Any] = []
     var timer: Timer?
@@ -75,7 +76,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } as Any)
         monitors.append(NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if event.keyCode == escape {
-                MainActor.assumeIsolated { self.close() }
+                MainActor.assumeIsolated {
+                    // タイトルの入力中なら、パネルは閉じずに入力だけやめる
+                    if self.model.editing != nil {
+                        self.model.editing = nil
+                    } else {
+                        self.close()
+                    }
+                }
                 return nil
             }
             return event
@@ -85,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func close() {
         monitors.forEach(NSEvent.removeMonitor)
         monitors = []
+        model.editing = nil
         window.orderOut(nil)
     }
 
@@ -149,10 +158,10 @@ if CommandLine.arguments.dropFirst().first == "--check" {
         for s in await scanner.scan().sorted(by: { $0.lastAt < $1.lastAt }) {
             let idle = Int(s.idle(at: now) / 60)
             if s.ignored {
-                print("IGNORED idle=\(idle)m sid=\(s.id) [\(s.title)] cwd=\(s.cwd)")
+                print("IGNORED idle=\(idle)m sid=\(s.id) [\(s.displayTitle)] cwd=\(s.cwd)")
             } else {
                 let overdue = s.isOverdue(at: now, thresholds: thresholds) ? " OVERDUE" : ""
-                print("\(s.state.rawValue) idle=\(idle)m\(overdue) sid=\(s.id) [\(s.title)] last=\(s.lastType) tools=\(s.tools.joined(separator: ",")) kind=\(s.kind) status=\(s.status ?? "?")")
+                print("\(s.state.rawValue) idle=\(idle)m\(overdue) sid=\(s.id) [\(s.displayTitle)] last=\(s.lastType) tools=\(s.tools.joined(separator: ",")) kind=\(s.kind) status=\(s.status ?? "?")")
             }
         }
         exit(0)

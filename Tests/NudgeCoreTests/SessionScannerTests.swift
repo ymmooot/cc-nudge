@@ -19,6 +19,7 @@ final class Fixture {
     var procs: [Int32: ProcessSnapshot] = [:]
 
     var ignoreFile: URL { root.appending(path: "ignore") }
+    var titleFile: URL { root.appending(path: "titles") }
     var project: URL { root.appending(path: "projects").appending(path: SessionScanner.projectName(cwd)) }
 
     init() {
@@ -48,7 +49,7 @@ final class Fixture {
     }
 
     func scanner() -> SessionScanner {
-        SessionScanner(claudeDir: root, ignoreFile: ignoreFile, processes: FakeProcesses(procs: procs))
+        SessionScanner(claudeDir: root, ignoreFile: ignoreFile, titleFile: titleFile, processes: FakeProcesses(procs: procs))
     }
 }
 
@@ -107,6 +108,16 @@ struct SessionScannerTests {
             assistant("2026-10-28T04:00:00Z"),
         ])
         #expect(await f.scanner().scan().first?.title == "新しい題")
+    }
+
+    @Test func customTitleOverridesTheDisplayOnly() async throws {
+        let f = Fixture()
+        f.session(pid: 1, sid: "s1", lines: [line(["type": "ai-title", "aiTitle": "AI の題"]), assistant("2026-10-28T04:00:00Z")])
+        try "s1 自分の題\n".write(to: f.titleFile, atomically: true, encoding: .utf8)
+        let s = await f.scanner().scan()[0]
+        #expect(s.title == "AI の題")
+        #expect(s.customTitle == "自分の題")
+        #expect(s.displayTitle == "自分の題")
     }
 
     @Test func deadOrOtherProcessesAreSkipped() async {
@@ -225,6 +236,27 @@ struct IgnoreListTests {
 
         try list.remove(sessionID: "s1")
         #expect(try String(contentsOf: url, encoding: .utf8) == original + "\n")
+    }
+}
+
+struct TitleListTests {
+    @Test func setReplacesAndEmptyRemoves() throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "titles-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try "# 手書きのコメント\ns1   最初の題  \n".write(to: url, atomically: true, encoding: .utf8)
+        let list = TitleList(url: url)
+        #expect(list.titles() == ["s1": "最初の題"])
+
+        try list.set(sessionID: "s2", title: " 二つ目 ")
+        try list.set(sessionID: "s1", title: "書き換えた題")
+        #expect(try String(contentsOf: url, encoding: .utf8) == "# 手書きのコメント\ns2 二つ目\ns1 書き換えた題\n")
+
+        try list.set(sessionID: "s1", title: "  ")
+        #expect(list.titles() == ["s2": "二つ目"])
+    }
+
+    @Test func missingFileHasNoTitles() {
+        #expect(TitleList(url: URL(filePath: "/nonexistent/titles")).titles().isEmpty)
     }
 }
 

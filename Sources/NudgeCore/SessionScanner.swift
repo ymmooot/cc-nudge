@@ -9,18 +9,21 @@ import Foundation
 public actor SessionScanner {
     let claudeDir: URL
     let ignore: IgnoreList
+    let titles: TitleList
     let processes: any ProcessProvider
     /// 会話ログごとに読んだ位置を覚え、次からは伸びた分だけ読む
     private var logs: [URL: SessionLog] = [:]
 
-    public init(claudeDir: URL, ignoreFile: URL, processes: any ProcessProvider = SystemProcesses()) {
+    public init(claudeDir: URL, ignoreFile: URL, titleFile: URL, processes: any ProcessProvider = SystemProcesses()) {
         self.claudeDir = claudeDir
         ignore = IgnoreList(url: ignoreFile)
+        titles = TitleList(url: titleFile)
         self.processes = processes
     }
 
     public func scan() -> [Session] {
         let patterns = ignore.patterns()
+        let titles = titles.titles()
         let files = (try? FileManager.default.contentsOfDirectory(at: claudeDir.appending(path: "sessions"), includingPropertiesForKeys: nil)) ?? []
         var sessions: [Session] = []
         var seen: Set<URL> = []
@@ -61,6 +64,7 @@ public actor SessionScanner {
                 kind: kind,
                 status: record.status,
                 title: log.title ?? (record.cwd as NSString).lastPathComponent,
+                customTitle: titles[record.sessionId],
                 state: waiting ? .waiting : .running,
                 lastAt: at,
                 lastType: last.type,

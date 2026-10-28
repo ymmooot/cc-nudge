@@ -13,10 +13,14 @@ final class Model {
     var arrowX: CGFloat = 20
     var refresh: () -> Void = {}
     var dismiss: () -> Void = {}
+    /// タイトルを入力中のセッション ID
+    var editing: String?
     let ignore: IgnoreList
+    let titles: TitleList
 
-    init(ignore: IgnoreList) {
+    init(ignore: IgnoreList, titles: TitleList) {
         self.ignore = ignore
+        self.titles = titles
     }
 
     /// 放置の長いものから
@@ -49,6 +53,17 @@ final class Model {
             }
         } catch {
             NSLog("cc-nudge: ignore: \(error)")
+        }
+        refresh()
+    }
+
+    /// 空なら Claude Code のタイトルに戻す
+    func setTitle(_ s: Session, _ title: String) {
+        editing = nil
+        do {
+            try titles.set(sessionID: s.id, title: title)
+        } catch {
+            NSLog("cc-nudge: titles: \(error)")
         }
         refresh()
     }
@@ -157,9 +172,14 @@ struct Row: View {
 
     var body: some View {
         let overdue = session.isOverdue(at: model.now, thresholds: model.thresholds)
+        let editing = model.editing == session.id
         HStack(spacing: 4) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(session.title).fontWeight(overdue ? .semibold : .regular).lineLimit(1)
+                if editing {
+                    TitleField(session: session, model: model)
+                } else {
+                    Text(session.displayTitle).fontWeight(overdue ? .semibold : .regular).lineLimit(1)
+                }
                 Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
@@ -188,7 +208,12 @@ struct Row: View {
         .foregroundStyle(session.ignored ? .secondary : .primary)
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
-        .onTapGesture { model.open(session) }
+        .onTapGesture {
+            if !editing { model.open(session) }
+        }
+        .contextMenu {
+            Button("タイトルを変更") { model.editing = session.id }
+        }
     }
 
     var detail: String {
@@ -206,6 +231,25 @@ struct Row: View {
     func fill(_ overdue: Bool) -> Color {
         if overdue { return Color.orange.opacity(hovered ? 0.22 : 0.12) }
         return hovered ? Color.black.opacity(0.05) : .clear
+    }
+}
+
+/// 行のタイトルをその場で書き換える入力欄。Enter で保存、Esc は main.swift のモニターが受けて取り消す
+struct TitleField: View {
+    let session: Session
+    let model: Model
+    @State var text = ""
+    @FocusState var focused: Bool
+
+    var body: some View {
+        TextField("", text: $text, prompt: Text(session.title))
+            .textFieldStyle(.plain)
+            .focused($focused)
+            .onAppear {
+                text = session.displayTitle
+                focused = true
+            }
+            .onSubmit { model.setTitle(session, text) }
     }
 }
 

@@ -15,7 +15,10 @@ public struct Session: Sendable, Equatable, Identifiable {
     public let cwd: String
     public let kind: String
     public let status: String?
+    /// Claude Code が付けたタイトル（ターミナルのタイトルと同じ）。herdr のペインを探すのに使う
     public let title: String
+    /// パネルで付け替えたタイトル
+    public let customTitle: String?
     public let state: SessionState
     public let lastAt: Date
     public let lastType: String
@@ -26,6 +29,7 @@ public struct Session: Sendable, Equatable, Identifiable {
     public let ignoredBySession: Bool
 
     public var directoryName: String { (cwd as NSString).lastPathComponent }
+    public var displayTitle: String { customTitle ?? title }
 
     public func idle(at now: Date) -> TimeInterval {
         max(0, now.timeIntervalSince(lastAt))
